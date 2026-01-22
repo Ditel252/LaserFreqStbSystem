@@ -50,15 +50,15 @@ class LockInControlPanel(QWidget):
         """パラメータの定義（名前、ラベル、初期値、範囲、ステップ、単位、更新時の動作）"""
         self.configs = [
             # 変調 (Modulation)
-            ParamConfig("mod_freq", "周波数", 800.0, 0.0, 1000.0, 5.0, 0.1, "Hz", 
+            ParamConfig("mod_freq", "周波数", 1000.0, 0.0, 1000.0, 5.0, 0.1, "Hz", 
                         lambda v: (setattr(self.rp_asg, 'frequency', v), setattr(self.rp_iq, 'frequency', v))),
-            ParamConfig("mod_amp", "振幅", 500.0, 0.0, 500.0, 10.0, 1.0, "mV", 
+            ParamConfig("mod_amp", "振幅", 5.0, 0.0, 500.0, 10.0, 1.0, "mV", 
                         lambda v: setattr(self.rp_asg, 'amplitude', v / 1000.0)),
-            ParamConfig("mod_off", "オフセット", 500.0, -1000.0, 1000.0, 10.0, 1.0, "mV", 
+            ParamConfig("mod_off", "オフセット", 0.0, -1000.0, 1000.0, 10.0, 1.0, "mV", 
                         lambda v: setattr(self.rp_asg, 'offset', v / 1000.0)),
             
             # 復調 (Demodulation)
-            ParamConfig("demod_gain", "ゲイン", 10.0, 0.001, 1000.0, 10.0, 1.0, "-", 
+            ParamConfig("demod_gain", "ゲイン", 25.0, 0.001, 1000.0, 10.0, 1.0, "-", 
                         lambda v: setattr(self.rp_iq, 'quadrature_factor', v)),
             ParamConfig("demod_phase", "位相", 0.0, -3600.0, 3600.0, 10.0, 0.1, "deg", 
                         lambda v: setattr(self.rp_iq, 'phase', v % 360)),
@@ -67,8 +67,8 @@ class LockInControlPanel(QWidget):
 
             # PID
             ParamConfig("pid_com", "共通ゲイン", 1.0, -1000.0, 1000.0, 1.0, 0.1, "-", self._update_pid_all),
-            ParamConfig("pid_p", "Pゲイン", 1.0, 0.0, 1.0, 0.1, 0.01, "-", self._update_pid_all),
-            ParamConfig("pid_i", "Iゲイン", 0.0, 0.0, 1.0, 0.1, 0.01, "-", self._update_pid_all),
+            ParamConfig("pid_p", "Pゲイン", 0.2, 0.0, 1.0, 0.1, 0.01, "-", self._update_pid_all),
+            ParamConfig("pid_i", "Iゲイン", 1.5, 0.0, 1.0, 0.1, 0.01, "-", self._update_pid_all),
             ParamConfig("pid_d", "Dゲイン", 0.0, 0.0, 1.0, 0.1, 0.01, "-", self._update_pid_all),
             # LD中心引き戻し (Software PID)
             ParamConfig("center_p", "Center-P", 0.0, -100.0, 100.0, 0.1, 0.01, "-", None),
