@@ -33,6 +33,7 @@ class LockInControlPanel(QWidget):
         self.isFineMode = False   # パラメータの増加モードを微調にするか(True:微調/False:通常)
         self.isModOutputEnable = False  # 出力を有効にするか(True:有効/False:無効)
         self.isPidOutputEnable = False  # PID出力を有効にするか(True:有効/False:無効(0Vを出力))
+        self.isAutoPhaseEnable = False # 位相自動補正を有効にするか(True:有効/False:無効)
         self.nowSettingParams = {}  # 現在の各設定パラメータを格納する配列
         self.qLineEditWidgets = {}  # テキスト入力ボックスのUI部品を格納する配列
 
@@ -107,6 +108,9 @@ class LockInControlPanel(QWidget):
             # UI表示の更新
             self.lbl_pid_out.setText(f"{v_out:+.2E}")
             self.lbl_pid_ival.setText(f"{v_ival:+.2E}")
+            
+            if self.is_auto_phase_enabled:
+                self._do_auto_phase()
             
         except Exception as e:
             # 万が一エラーが発生した場合のみ表示
@@ -224,6 +228,9 @@ class LockInControlPanel(QWidget):
                 self.btn_out = self._createBtn("出力(Space)", self._toggle_mod_output, checkable=True)
                 layout.addWidget(self.btn_fine, start_row+3, 4)
                 layout.addWidget(self.btn_out, start_row+4, 4)
+            else:
+                self.btn_auto_phase = self._createBtn("自動補正(P)", self._toggle_auto_phase, checkable=True)
+                layout.addWidget(self.btn_auto_phase, start_row+3, 4)
 
     def _addPidSection(self, layout, title, configs, start_row):
         # --- タイトル (Row 10) ---
@@ -294,6 +301,57 @@ class LockInControlPanel(QWidget):
             self.rp_asg.frequency = 0; self.rp_asg.offset = 0; self.rp_asg.amplitude = 0
         print(f"Output: {'ENABLED' if self.isModOutputEnable else 'DISABLED'}")
         
+    def _toggle_auto_phase(self):
+        """自動補正ボタンの状態を切り替え"""
+        self.isAutoPhaseEnable = self.btn_auto_phase.isChecked() 
+        
+        if self.isAutoPhaseEnable:
+            self.btn_auto_phase.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+            self.btn_auto_phase.setText("補正中 (P)")
+        else:
+            self.btn_auto_phase.setStyleSheet("")
+            self.btn_auto_phase.setText("自動補正(P)")
+
+    def _do_auto_phase(self):
+        """山登り法による位相の自動最適化（信号の正のピークを維持）"""
+        if not hasattr(self, 'rp_iq'): return
+        try:
+            # 絶対値をとらずに現在の信号値を取得
+            # これにより、最も「正に大きい」ポイント（ピーク）を探しに行きます
+            v_now = self.rp_iq.current_output_signal
+            
+            test_step = 1.0
+            current_phase = self.nowSettingParams["demod_phase"]
+            
+            if not hasattr(self, '_prev_v_auto_phase'):
+                self._prev_v_auto_phase = v_now
+                self._phase_direction = 1.0
+                return
+
+            # 前回より値が小さくなったら方向を反転
+            # (正の方向に最大化したいので、値が減ったら逆へ行く)
+            if v_now < self._prev_v_auto_phase:
+                self._phase_direction *= -1.0
+            
+            # 位相を更新
+            new_phase = (current_phase + (self._phase_direction * test_step)) % 360
+            self._applyValToHw("demod_phase", new_phase)
+            
+            self._prev_v_auto_phase = v_now
+            
+        except Exception as e:
+            print(f"Auto Phase Error: {e}")
+            
+    def _flip_phase(self):
+        """位相を180度反転させる（エラー信号の極性を入れ替える）"""
+        new_phase = (self.nowSettingParams["demod_phase"] + 180) % 360
+        self._applyValToHw("demod_phase", new_phase)
+        # 前回の値をリセットして、反転後の位置から再追従させる
+        if hasattr(self, '_prev_v_auto_phase'):
+            delattr(self, '_prev_v_auto_phase')
+        print(f"Phase flipped 180 deg: {new_phase:.1f}")
+
+        
     def _toggle_pid_output(self):
         self.isPidOutputEnable = self.btn_pid_out.isChecked()
         
@@ -315,15 +373,23 @@ class LockInControlPanel(QWidget):
         print(f"PID Output: {'ENABLED' if self.isPidOutputEnable else 'DISABLED'} (I-Gain Sync Done)")
 
     def _update_monitors(self):
-        if not hasattr(self, 'rp_pid'): return
+        """タイマーで呼ばれる更新関数"""
+        if not hasattr(self, 'rp_pid'): 
+            return
+        
         try:
-            # 1. PZT状態表示
-            v_pzt = self.rp_pid.current_output_signal
-            self.lbl_pid_out.setText(f"{v_pzt:+.2E}")
-            self.lbl_pid_ival.setText(f"{self.rp_pid.ival:+.2E}")
-
+            v_out = self.rp_pid.current_output_signal
+            v_ival = self.rp_pid.ival
+            
+            self.lbl_pid_out.setText(f"{v_out:+.2E}")
+            self.lbl_pid_ival.setText(f"{v_ival:+.2E}")
+            
+            # ここが self.isAutoPhaseEnable になっていることを確認
+            if self.isAutoPhaseEnable:
+                self._do_auto_phase()
+            
         except Exception as e:
-            print(f"Monitor error: {e}")
+            print(f"Monitor update error: {e}")
 
     # --- ハードウェア・システム系 ---
     def _initialize_hardware(self):
@@ -367,6 +433,8 @@ class LockInControlPanel(QWidget):
         QShortcut(QKeySequence(Qt.Key_Shift), self).activated.connect(self.btn_fine.click)
         QShortcut(QKeySequence("X"), self).activated.connect(self.btn_pid_out.click)
         QShortcut(QKeySequence("C"), self).activated.connect(self.btn_pid_reset.click)
+        QShortcut(QKeySequence("P"), self).activated.connect(self.btn_auto_phase.click)
+        QShortcut(QKeySequence("Shift+P"), self).activated.connect(self._flip_phase)
 
     def eventFilter(self, source, event):
         """テキストボックスフォーカス中のキー横取り (元のコードの挙動を維持)"""
@@ -381,6 +449,14 @@ class LockInControlPanel(QWidget):
             if event.key() == Qt.Key_Shift: self.btn_fine.click(); return True
             if event.key() == Qt.Key_X: self.btn_pid_out.click(); return True
             if event.key() == Qt.Key_C: self.btn_pid_reset.click(); return True
+            
+            modifiers = QApplication.keyboardModifiers()
+            if event.key() == Qt.Key_P:
+                if modifiers & Qt.ShiftModifier:
+                    self._flip_phase()
+                else:
+                    self.btn_auto_phase.click()
+                return True
         return super().eventFilter(source, event)
 
     def closeEvent(self, event):
