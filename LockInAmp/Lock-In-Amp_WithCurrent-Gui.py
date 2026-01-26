@@ -32,9 +32,6 @@ class LockInControlPanel(QWidget):
         self.is_pid_enabled = False
         self.params = {}  # 各パラメータの現在値を保持
         self.widgets = {} # 各パラメータのUI要素を保持
-        self.is_centering_enabled = False
-        self.center_err_sum = 0.0
-        self.center_last_err = 0.0
 
         # 1. ハードウェア初期化の前に、パラメータ定義を作成
         self._setup_param_configs()
@@ -50,15 +47,15 @@ class LockInControlPanel(QWidget):
         """パラメータの定義（名前、ラベル、初期値、範囲、ステップ、単位、更新時の動作）"""
         self.configs = [
             # 変調 (Modulation)
-            ParamConfig("mod_freq", "周波数", 800.0, 0.0, 1000.0, 5.0, 0.1, "Hz", 
+            ParamConfig("mod_freq", "周波数", 1000.0, 0.0, 1000.0, 5.0, 0.1, "Hz", 
                         lambda v: (setattr(self.rp_asg, 'frequency', v), setattr(self.rp_iq, 'frequency', v))),
-            ParamConfig("mod_amp", "振幅", 500.0, 0.0, 500.0, 10.0, 1.0, "mV", 
+            ParamConfig("mod_amp", "振幅", 5.0, 0.0, 500.0, 10.0, 1.0, "mV", 
                         lambda v: setattr(self.rp_asg, 'amplitude', v / 1000.0)),
-            ParamConfig("mod_off", "オフセット", 500.0, -1000.0, 1000.0, 10.0, 1.0, "mV", 
+            ParamConfig("mod_off", "オフセット", 0.0, -1000.0, 1000.0, 10.0, 1.0, "mV", 
                         lambda v: setattr(self.rp_asg, 'offset', v / 1000.0)),
             
             # 復調 (Demodulation)
-            ParamConfig("demod_gain", "ゲイン", 10.0, 0.001, 1000.0, 10.0, 1.0, "-", 
+            ParamConfig("demod_gain", "ゲイン", 25.0, 0.001, 1000.0, 10.0, 1.0, "-", 
                         lambda v: setattr(self.rp_iq, 'quadrature_factor', v)),
             ParamConfig("demod_phase", "位相", 0.0, -3600.0, 3600.0, 10.0, 0.1, "deg", 
                         lambda v: setattr(self.rp_iq, 'phase', v % 360)),
@@ -67,13 +64,9 @@ class LockInControlPanel(QWidget):
 
             # PID
             ParamConfig("pid_com", "共通ゲイン", 1.0, -1000.0, 1000.0, 1.0, 0.1, "-", self._update_pid_all),
-            ParamConfig("pid_p", "Pゲイン", 1.0, 0.0, 1.0, 0.1, 0.01, "-", self._update_pid_all),
-            ParamConfig("pid_i", "Iゲイン", 0.0, 0.0, 1.0, 0.1, 0.01, "-", self._update_pid_all),
+            ParamConfig("pid_p", "Pゲイン", 0.2, 0.0, 1.0, 0.1, 0.01, "-", self._update_pid_all),
+            ParamConfig("pid_i", "Iゲイン", 1.5, 0.0, 1.0, 0.1, 0.01, "-", self._update_pid_all),
             ParamConfig("pid_d", "Dゲイン", 0.0, 0.0, 1.0, 0.1, 0.01, "-", self._update_pid_all),
-            # LD中心引き戻し (Software PID)
-            ParamConfig("center_p", "Center-P", 0.0, -100.0, 100.0, 0.1, 0.01, "-", None),
-            ParamConfig("center_i", "Center-I", 0.0, -100.0, 100.0, 0.1, 0.01, "-", None),
-            ParamConfig("center_d", "Center-D", 0.0, -100.0, 100.0, 0.1, 0.01, "-", None),
         ]
         # パラメータ初期値の辞書作成
         for c in self.configs:
@@ -169,7 +162,7 @@ class LockInControlPanel(QWidget):
     # --- UI構築 ---
     def _init_ui(self):
         self.setWindowTitle("Lock-In Amp Control Panel")
-        self.resize(800, 700)
+        self.resize(800, 500)
         self.header_font = QFont(); self.header_font.setPointSize(10); self.header_font.setBold(True)
         
         layout = QGridLayout()
@@ -252,33 +245,6 @@ class LockInControlPanel(QWidget):
         # 積分リセット(C)
         self.btn_pid_reset = self._create_btn("積分リセット (C)", self._reset_integrator)
         layout.addWidget(self.btn_pid_reset, start_row + 3, 4, 2, 1)
-
-        # --- LD中心引き戻し設定 (Row 15-16) ---
-        # セクション見出し
-        lbl_center = QLabel("LD中心引き戻し設定"); lbl_center.setFont(self.header_font)
-        layout.addWidget(lbl_center, start_row+5, 0, 1, 3)
-
-        # Center-P, I, D (configs[4:7])
-        # ここで enumerate(configs[4:7]) とすることで、4番目(P), 5番目(I), 6番目(D) を回します
-        for i, cfg in enumerate(configs[4:7]):
-            layout.addWidget(QLabel(f"{cfg.label}", font=self.header_font, alignment=Qt.AlignCenter), start_row+6, i)
-            self.widgets[cfg.name] = self._create_edit(cfg)
-            layout.addWidget(self.widgets[cfg.name], start_row+7, i)
-
-        # Center用ボタン (Row 16-17, 4列目)
-        self.btn_center = self._create_btn("Auto Center (V)", self._toggle_centering, checkable=True)
-        self.btn_center_reset = self._create_btn("Centerリセット (B)", self._reset_centering)
-        layout.addWidget(self.btn_center, start_row + 6, 4)
-        layout.addWidget(self.btn_center_reset, start_row + 7, 4)
-
-        # Centerモニター (Row 18-19)
-        layout.addWidget(QLabel("Center操作量(mV)"), start_row+8, 0)
-        self.lbl_center_out = QLabel("+0.00E+00"); self.lbl_center_out.setStyleSheet(monitor_style)
-        layout.addWidget(self.lbl_center_out, start_row+9, 0)
-
-        layout.addWidget(QLabel("Center積分値"), start_row+8, 1)
-        self.lbl_center_ival = QLabel("+0.00E+00"); self.lbl_center_ival.setStyleSheet(monitor_style)
-        layout.addWidget(self.lbl_center_ival, start_row+9, 1)
     
     def _create_edit(self, cfg):
         """QLineEdit作成の共通処理"""
@@ -338,15 +304,6 @@ class LockInControlPanel(QWidget):
                 self.rp_pid.output_direct = 'off'
         
         print(f"PID Output: {'ENABLED' if self.is_pid_enabled else 'DISABLED'} (I-Gain Sync Done)")
-        
-    def _toggle_centering(self):
-        self.is_centering_enabled = self.btn_center.isChecked()
-        self.btn_center.setStyleSheet("background-color: #f0ad4e; color: black; font-weight: bold;" if self.is_centering_enabled else "")
-
-    def _reset_centering(self):
-        self.center_err_sum = 0.0
-        self.center_last_err = 0.0
-        print("Centering Integrator Reset.")
 
     def _update_monitors(self):
         if not hasattr(self, 'rp_pid'): return
@@ -355,36 +312,6 @@ class LockInControlPanel(QWidget):
             v_pzt = self.rp_pid.current_output_signal
             self.lbl_pid_out.setText(f"{v_pzt:+.2E}")
             self.lbl_pid_ival.setText(f"{self.rp_pid.ival:+.2E}")
-
-            # 2. ソフトウェアPID (LD中心引き戻し)
-            if self.is_centering_enabled and self.is_pid_enabled:
-                dt = 0.1 # 100ms
-                error = 0.0 - v_pzt # 目標は0V
-                
-                if self.params["center_i"] != 0:
-                    self.center_err_sum += error * dt
-                
-                derivative = (error - self.center_last_err) / dt
-                
-                # PID計算
-                p_part = self.params["center_p"] * error
-                i_part = self.params["center_i"] * self.center_err_sum
-                d_part = self.params["center_d"] * derivative
-                adjustment = p_part + i_part + d_part
-                
-                # mod_off 適用
-                new_mod_off = self.params["mod_off"] + adjustment
-                cfg_mod = next(c for c in self.configs if c.name == "mod_off")
-                new_mod_off = max(cfg_mod.min_val, min(cfg_mod.max_val, new_mod_off))
-                self._apply_value("mod_off", new_mod_off)
-                
-                # モニター更新
-                self.lbl_center_out.setText(f"{adjustment:+.2E}")
-                self.lbl_center_ival.setText(f"{self.center_err_sum:+.2E}")
-                
-                self.center_last_err = error
-            else:
-                self.lbl_center_out.setText(f"{0.0:+.2E}")
 
         except Exception as e:
             print(f"Monitor error: {e}")
@@ -431,8 +358,6 @@ class LockInControlPanel(QWidget):
         QShortcut(QKeySequence(Qt.Key_Shift), self).activated.connect(self.btn_fine.click)
         QShortcut(QKeySequence("X"), self).activated.connect(self.btn_pid_out.click)
         QShortcut(QKeySequence("C"), self).activated.connect(self.btn_pid_reset.click)
-        QShortcut(QKeySequence("V"), self).activated.connect(self.btn_center.click)
-        QShortcut(QKeySequence("B"), self).activated.connect(self.btn_center_reset.click)
 
     def eventFilter(self, source, event):
         """テキストボックスフォーカス中のキー横取り (元のコードの挙動を維持)"""
@@ -447,8 +372,6 @@ class LockInControlPanel(QWidget):
             if event.key() == Qt.Key_Shift: self.btn_fine.click(); return True
             if event.key() == Qt.Key_X: self.btn_pid_out.click(); return True
             if event.key() == Qt.Key_C: self.btn_pid_reset.click(); return True
-            if event.key() == Qt.Key_V: self.btn_center.click(); return True
-            if event.key() == Qt.Key_B: self.btn_center_reset.click(); return True
         return super().eventFilter(source, event)
 
     def closeEvent(self, event):
